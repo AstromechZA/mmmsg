@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"mime/multipart"
+	"net/textproto"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -11,6 +15,8 @@ import (
 
 	// mattermost bot client
 	"github.com/mattermost/platform/model"
+
+	"mime"
 
 	"github.com/AstromechZA/mmmsg/conf"
 )
@@ -59,6 +65,7 @@ func mainInner() error {
 	versionFlag := flag.Bool("version", false, "Print the version string.")
 	codeBlock := flag.Bool("codeblock", false, "Surround the input with code block backticks")
 	channelFlag := flag.String("channel", "", "Channel to post in, @username not yet supported")
+	attachmentFlag := flag.String("attachment", "", "Upload and attach this file")
 
 	// set a more verbose usage message.
 	flag.Usage = func() {
@@ -74,6 +81,12 @@ func mainInner() error {
 		fmt.Println(logoImage)
 		fmt.Println("Project: https://github.com/AstromechZA/mmmsg")
 		return nil
+	}
+
+	if *attachmentFlag != "" {
+		if _, err := os.Stat(*attachmentFlag); os.IsNotExist(err) {
+			return fmt.Errorf("Attachment file %v does not exist", *attachmentFlag)
+		}
 	}
 
 	// now load the stdin
@@ -105,17 +118,17 @@ func mainInner() error {
 	}
 	configPath, err = filepath.Abs(configPath)
 	if err != nil {
-		return fmt.Errorf("Failed to identify config path: %v\n", err.Error())
+		return fmt.Errorf("Failed to identify config path: %v", err.Error())
 	}
 
 	// quick validate the config
 	cfg, err := conf.Load(&configPath)
 	if err != nil {
-		return fmt.Errorf("Config failed to load: %v\n", err.Error())
+		return fmt.Errorf("Config failed to load: %v", err.Error())
 	}
 	err = conf.Validate(cfg)
 	if err != nil {
-		return fmt.Errorf("Config failed validation: %v\n", err.Error())
+		return fmt.Errorf("Config failed validation: %v", err.Error())
 	}
 
 	// override channel name from config if required
@@ -129,7 +142,7 @@ func mainInner() error {
 	fmt.Printf("Connecting to Mattermost server at %v..\n", cfg.MattermostAPIUrl)
 	serverProperties, apperr := client.GetPing()
 	if apperr != nil {
-		return fmt.Errorf("Failed to connect to Mattermost: %v\n", err.Error())
+		return fmt.Errorf("Failed to connect to Mattermost: %v", err.Error())
 	}
 
 	serverVersion := serverProperties["version"]
@@ -145,7 +158,7 @@ func mainInner() error {
 	// login as bot
 	fmt.Println("Logging in..")
 	if _, err := client.Login(cfg.MattermostUser, cfg.MattermostPassword); err != nil {
-		return fmt.Errorf("Failed to login to Mattermost: %v\n", err.Error())
+		return fmt.Errorf("Failed to login to Mattermost: %v", err.Error())
 	}
 
 	// do initial load
@@ -153,7 +166,7 @@ func mainInner() error {
 	fmt.Println("Loading initial data..")
 	initialLoadResults, apperr := client.GetInitialLoad()
 	if apperr != nil {
-		return fmt.Errorf("Failed to get initial Mattermost data: %v\n", apperr.Error())
+		return fmt.Errorf("Failed to get initial Mattermost data: %v", apperr.Error())
 	}
 
 	initialLoad = initialLoadResults.Data.(*model.InitialLoad)
@@ -167,7 +180,7 @@ func mainInner() error {
 		}
 	}
 	if botTeam == nil {
-		return fmt.Errorf("Bot does not appear to be a member of the team '%v'\n", cfg.MattermostTeam)
+		return fmt.Errorf("Bot does not appear to be a member of the team '%v'", cfg.MattermostTeam)
 	}
 	// set team
 	client.SetTeamId(botTeam.Id)
@@ -177,7 +190,7 @@ func mainInner() error {
 	fmt.Println("Pulling list of channels..")
 	channelsResult, apperr := client.GetChannels("")
 	if apperr != nil {
-		return fmt.Errorf("Failed to pull channel list: %v\n", apperr.Error())
+		return fmt.Errorf("Failed to pull channel list: %v", apperr.Error())
 	}
 	channelList := *channelsResult.Data.(*model.ChannelList)
 
@@ -188,7 +201,7 @@ func mainInner() error {
 		fmt.Printf("Scanning for user by name '%v'..\n", username)
 		userProfiles, apperr := client.GetProfiles(botTeam.Id, "")
 		if apperr != nil {
-			return fmt.Errorf("Failed to pull user profiles: %v\n", apperr.Error())
+			return fmt.Errorf("Failed to pull user profiles: %v", apperr.Error())
 		}
 		var targetUser *model.User
 		userMap := userProfiles.Data.(map[string]*model.User)
@@ -218,7 +231,7 @@ func mainInner() error {
 				fmt.Printf("Creating new Direct Message Channel..")
 				directChannelResult, apperr := client.CreateDirectChannel(targetUser.Id)
 				if apperr != nil {
-					return fmt.Errorf("Failed to create direct message channel: %v\n", apperr.Error())
+					return fmt.Errorf("Failed to create direct message channel: %v", apperr.Error())
 				}
 				targetChannel = directChannelResult.Data.(*model.Channel)
 			}
@@ -229,7 +242,7 @@ func mainInner() error {
 	if targetChannel == nil {
 		fmt.Printf("Scanning for channel '%v'..\n", targetChannelName)
 		for _, channel := range channelList.Channels {
-			if channel.Type == "C" && channel.Name == cfg.DefaultChannel {
+			if channel.Name == cfg.DefaultChannel {
 				targetChannel = channel
 				break
 			}
@@ -238,16 +251,65 @@ func mainInner() error {
 
 	// error if still missing
 	if targetChannel == nil {
-		return fmt.Errorf("Failed to find channel with name '%v'\n", targetChannelName)
+		return fmt.Errorf("Failed to find channel with name '%v'", targetChannelName)
 	}
 
-	// do post
+	// prepare post
 	post := &model.Post{}
 	post.ChannelId = targetChannel.Id
 	post.Message = stringContent
+
+	// if upload is required, then do it
+	if *attachmentFlag != "" {
+		fmt.Printf("Attachment was specified, reading bytes from %v\n", *attachmentFlag)
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+
+		h := make(textproto.MIMEHeader)
+		h.Set("Content-Disposition",
+			fmt.Sprintf(`form-data; name="files"; filename="%s"`,
+				strings.NewReplacer("\\", "\\\\", `"`, "\\\"").Replace(filepath.Base(*attachmentFlag))))
+		ct := mime.TypeByExtension(filepath.Ext(*attachmentFlag))
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		h.Set("Content-Type", ct)
+		part, _ := writer.CreatePart(h)
+		file, err := os.Open(*attachmentFlag)
+		if err != nil {
+			return fmt.Errorf("Failed to read attachment file: %v", err.Error())
+		}
+		defer file.Close()
+		_, err = io.Copy(part, file)
+		if err != nil {
+			return fmt.Errorf("Failed to read attachment file: %v", err.Error())
+		}
+
+		field, _ := writer.CreateFormField("channel_id")
+		_, _ = field.Write([]byte(targetChannel.Id))
+		err = writer.Close()
+		if err != nil {
+			return fmt.Errorf("Failed to build form body: %v", err.Error())
+		}
+
+		field, _ = writer.CreateFormField("channel_id")
+		_, _ = field.Write([]byte(targetChannel.Id))
+		err = writer.Close()
+		if err != nil {
+			return fmt.Errorf("Failed to build form body: %v", err.Error())
+		}
+
+		uploadResult, apperr := client.UploadPostAttachment(body.Bytes(), writer.FormDataContentType())
+		if apperr != nil {
+			return fmt.Errorf("Failed to upload file: %v", apperr.DetailedError)
+		}
+		uploadedFile := uploadResult.Data.(*model.FileUploadResponse)
+		post.Filenames = uploadedFile.Filenames
+	}
+
 	fmt.Printf("Posting message of %v bytes..\n", len(stringContent))
 	if _, err := client.CreatePost(post); err != nil {
-		return fmt.Errorf("Failed to post message: %v\n", err.Error())
+		return fmt.Errorf("Failed to post message: %v", err.Error())
 	}
 	return nil
 }

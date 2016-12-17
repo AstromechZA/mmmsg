@@ -34,3 +34,6 @@ buildbinary darwin amd64
 
 # build for linux
 buildbinary linux amd64
+
+// zip up
+tar -czf mmmsg-$VERSION.tgz -C build .

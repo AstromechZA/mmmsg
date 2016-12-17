@@ -3,10 +3,10 @@
 set -e
 
 # first build the version string
-VERSION=1.0
+VERSION_NUM=1.0
 
 # add the git commit id and date
-VERSION="$VERSION (commit $(git rev-parse --short HEAD) @ $(git log -1 --date=short --pretty=format:%cd))"
+VERSION="$VERSION_NUM (commit $(git rev-parse --short HEAD) @ $(git log -1 --date=short --pretty=format:%cd))"
 
 function buildbinary {
     goos=$1
@@ -24,7 +24,7 @@ function buildbinary {
     go build -i -v -o "$outputfolder/mmmsg" -ldflags "-X \"main.MMMsgVersion=$VERSION\"" github.com/AstromechZA/mmmsg
 
     echo "Done"
-    ls -l "$outputfolder/mmmsg"
+    ls -lh "$outputfolder/mmmsg"
     file "$outputfolder/mmmsg"
     echo
 }
@@ -35,5 +35,7 @@ buildbinary darwin amd64
 # build for linux
 buildbinary linux amd64
 
-// zip up
-tar -czf mmmsg-$VERSION.tgz -C build .
+# zip up
+tar -czf mmmsg-${VERSION_NUM}.tgz -C build .
+ls -lh mmmsg-${VERSION_NUM}.tgz
+file mmmsg-${VERSION_NUM}.tgz

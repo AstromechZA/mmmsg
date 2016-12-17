@@ -61,10 +61,10 @@ var MMMsgVersion = "<unofficial build>"
 func mainInner() error {
 
 	// first set up config flag options
-	configFlag := flag.String("config", "", "Path to a MMMsg config file.")
-	versionFlag := flag.Bool("version", false, "Print the version string.")
+	configFlag := flag.String("config", "", "Path to a MMMsg config file (default: $HOME/.config/mmmsg.json)")
+	versionFlag := flag.Bool("version", false, "Print the version string")
 	codeBlock := flag.Bool("codeblock", false, "Surround the input with code block backticks")
-	channelFlag := flag.String("channel", "", "Channel to post in, @username not yet supported")
+	channelFlag := flag.String("channel", "", "Channel to post in, @username for direct message")
 	attachmentFlag := flag.String("attachment", "", "Upload and attach this file")
 
 	// set a more verbose usage message.

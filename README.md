@@ -20,13 +20,28 @@ Config File Json:
   -attachment string
     	Upload and attach this file
   -channel string
-    	Channel to post in, @username not yet supported
+    	Channel to post in, @username for direct message
   -codeblock
     	Surround the input with code block backticks
   -config string
-    	Path to a MMMsg config file.
+    	Path to a MMMsg config file (default: $HOME/.config/mmmsg.json)
   -version
-    	Print the version string.
+    	Print the version string
+```
+
+Example:
+
+```
+$ echo "my prepared message content" | ./mmmsg --channel "alerts-channel" --attachment "alert.json"
+Connecting to Mattermost server at http://example-server.com..
+Server at example-server.com is running version 3.4.0
+Client version is 3.4.0
+Logging in..
+Loading initial data..
+Pulling list of channels..
+Scanning for channel 'alerts-channel'..
+Attachment was specified, reading bytes from alert.json
+Posting message of 27 bytes..
 ```
 
 ### Why not just use the built in incoming webhooks and ignore the complicated
